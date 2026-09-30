@@ -1,0 +1,170 @@
+# Matrix-product ScaleGMN config for size generalization v3: train w24, test w24-w256.
+# Non-overlapping images per width. SP ReLU INRs.
+#
+# The MSG function is constrained to a multiplication by the raw fan-in-rescaled scalar
+# weight, with ScaleGMN's node states and node update kept unchanged
+# (gnn_args.message_fn_type: matrix_product_scale, src/models/matrix_product_scale_layer.py):
+#
+#   msg_{u->v} = a_{u,v} * (h_u A_in),   A_in in R^{d_hid x d_hid} bias-free
+#
+# so with mean aggregation the forward aggregate is a matrix product,
+# Z^(l) = (1/n_{l-1}) Wbar^(l) H^(l-1) A_in, and the input weights enter the metanetwork
+# only through matrix multiplication. No edge states are formed or updated.
+#
+# ALWAYS run with --duplication-equiv True (fan-in rescaled edges + mean aggregation +
+# layer-wise mean readout): the matrix-product MSG is only defined on top of those, so
+# there is no baseline variant. Verify the layer first with
+# scripts/check_matrix_product_gmn.py --family scalegmn.
+#
+# Run via: python scripts/train_sizegen.py --conf configs/mnist_cls/mpsgmn_sizegen_sp_v3.yml --duplication-equiv True --wandb True
+
+batch_size: 64
+num_workers: 4
+
+data:
+  dataset: labeled_mnist_inr
+  train_layer_layouts:
+    - [2, 24, 24, 1]
+  train_dataset_paths:
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w24_sp
+  train_split_paths:
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w24_sp/mnist_sizegen_splits.json
+  test_layer_layouts:
+    - [2, 24, 24, 1]
+    - [2, 32, 32, 1]
+    - [2, 48, 48, 1]
+    - [2, 64, 64, 1]
+    - [2, 80, 80, 1]
+    - [2, 96, 96, 1]
+    - [2, 128, 128, 1]
+    - [2, 192, 192, 1]
+    - [2, 256, 256, 1]
+  test_dataset_paths:
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w24_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w32_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w48_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w64_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w80_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w96_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w128_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w192_sp
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w256_sp
+  test_split_paths:
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w24_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w32_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w48_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w64_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w80_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w96_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w128_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w192_sp/mnist_sizegen_splits.json
+    - $ANYDIM_DATA_ROOT/mnist_inrs/w256_sp/mnist_sizegen_splits.json
+  image_size: [28, 28]
+  node_pos_embed: &node_pos_embed True
+  edge_pos_embed: &edge_pos_embed False  # edge features must stay raw
+
+train_args:
+  num_epochs: 200
+  val_acc_threshold: 0.1
+  patience: 50
+  seed: 0
+  loss: CrossEntropyLoss
+
+scalegmn_args:
+  d_in_v: &d_in_v 1
+  d_in_e: &d_in_e 1
+  d_hid: &d_hid 128
+  num_layers: 4
+  direction: forward
+  equivariant: False
+  symmetry: scale
+  jit: False
+  compile: False
+
+  readout_range: full_graph
+  gnn_skip_connections: True
+
+  concat_mlp_directions: False
+  reciprocal: True
+
+  node_pos_embed: *node_pos_embed
+  edge_pos_embed: *edge_pos_embed
+
+  graph_init:
+    d_in_v: *d_in_v
+    d_in_e: *d_in_e
+    project_node_feats: True
+    project_edge_feats: False  # keep the raw scalar edge feature a_{u,v}
+    d_node: *d_hid
+    d_edge: *d_in_e
+
+  positional_encodings:
+    final_linear_pos_embed: False
+    sum_pos_enc: False
+    po_as_different_linear: False
+    equiv_net: False
+    sum_on_io: True
+    equiv_on_hidden: True
+    num_mlps: 3
+    layer_equiv_on_hidden: False
+
+  gnn_args:
+    d_hid: *d_hid
+    message_fn_layers: 1
+    message_fn_skip_connections: False
+    update_node_feats_fn_layers: 1
+    update_node_feats_fn_skip_connections: False
+    update_edge_attr: False  # no edge states in the matrix-product ScaleGMN
+    dropout: 0.2
+    dropout_all: False
+    update_as_act: False
+    update_as_act_arg: sum
+    mlp_on_io: False
+    msg_equiv_on_hidden: False  # no MSG EquivariantNet: the message is a matrix product
+    upd_equiv_on_hidden: True
+    layer_msg_equiv_on_hidden: False
+    layer_upd_equiv_on_hidden: False
+    msg_num_mlps: 2
+    upd_num_mlps: 2
+    pos_embed_msg: False
+    pos_embed_upd: False
+    layer_norm: False
+    aggregator: mean  # mean aggregation turns the messages into a matrix product
+    message_fn_type: matrix_product_scale
+    sign_symmetrization: True
+
+  mlp_args:
+    d_k: [ *d_hid ]
+    activation: silu
+    dropout: 0.
+    final_activation: identity
+    batch_norm: False
+    layer_norm: True
+    bias: True
+    skip: False
+
+  readout_args:
+    d_out: 10
+    d_rho: *d_hid
+
+optimization:
+  clip_grad: True
+  clip_grad_max_norm: 10.0
+  optimizer_name: AdamW
+  optimizer_args:
+    lr: 2.5e-4
+  scheduler_args:
+    scheduler: WarmupLRScheduler
+    warmup_steps: 1000
+    scheduler_mode: min
+    decay_rate: 0
+    decay_steps: 0
+    patience: None
+    min_lr: None
+
+wandb_args:
+  project: mnist_cls
+  entity: null
+  group: sizegen-v3-sp-mpsgmn
+  name: mpsgmn-sizegen-v3-sp-train24
+  tags: [sizegen-v3, train-w24, test-large, scale, matrix-product, sp, non-overlapping]

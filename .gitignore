@@ -1,0 +1,20 @@
+/data/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+
+# Logs
+*.log
+
+# Temporary configs written by train_scalegmn.py wrapper
+src/scalegmn/tmp*.yml
+
+# wandb
+wandb/
+.claude
+.vscode
+.DS_Store
+
+# Generated figures (regenerate with scripts/plot_*.py)
+results/figures

@@ -1,0 +1,28 @@
+name: anydim-metanet
+channels:
+  - pytorch
+  - nvidia
+  - pyg
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11.5
+  - numpy=1.26.0
+  - pandas=2.1.1
+  - scipy=1.11.3
+  - pytorch=2.1.1
+  - pytorch-cuda=12.1
+  - torchvision=0.16.1
+  - pytorch_geometric=2.4.0
+  - scikit-learn=1.2.2
+  - pyyaml=6.0.1
+  - tqdm=4.66.1
+  - wandb=0.15.12
+  - matplotlib
+  - pip
+  - pip:
+    - einops==0.7.0
+    - nfn==0.1.2
+    - opencv-python==4.10.0.84
+    - random-fourier-features-pytorch==1.0.1
+    - mup

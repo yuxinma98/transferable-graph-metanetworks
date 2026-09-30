@@ -1,0 +1,137 @@
+# ScaleGMN on the Unterthiner et al. small CNN zoo (CIFAR-10 grayscale), ReLU models.
+# Experiment 1 (reproduce): accuracy prediction at the zoo's native width w16.
+#
+# Copied from src/scalegmn/configs/cifar10/scalegmn_relu.yml with our data paths.
+# Target: metrics.test_accuracy; head sigmoid(net(batch)); MSE loss; headline metric
+# Kendall tau (model selection on val tau).  Success bar: test tau ~= 0.93.
+#
+# edge_pos_embed stays False: get_edge_types() enumerates the last layer's edge types
+# destination-major while cnn_to_tg_data's edge_index is source-major, which only
+# coincides when the output layer has a single node (as in the MNIST INRs).  With 10
+# output units they would disagree, so edge positional encodings are off here — as
+# they are in the upstream cifar10 configs.
+#
+# Run via: python scripts/train_predgen.py --conf configs/cifar10_predgen/scalegmn_predgen_sp.yml --wandb True
+
+batch_size: 64
+num_workers: 4
+
+data:
+  dataset: cifar10
+  dataset_path: $ANYDIM_DATA_ROOT/cifar10_zoo/
+  data_path: $ANYDIM_DATA_ROOT/cifar10_zoo/weights.npy
+  metrics_path: $ANYDIM_DATA_ROOT/cifar10_zoo/metrics.csv.gz
+  layout_path: $ANYDIM_DATA_ROOT/cifar10_zoo/layout.csv
+  idcs_file: $ANYDIM_DATA_ROOT/cifar10_zoo/cifar10_split.csv
+  activation_function: relu
+  node_pos_embed: &node_pos_embed True
+  edge_pos_embed: &edge_pos_embed False
+  # same for every datapoint, so it can be declared here: [1, 16, 16, 16, 10]
+  layer_layout: [1, 16, 16, 16, 10]
+
+train_args:
+  num_epochs: 200
+  seed: 0
+  loss: MSE
+
+scalegmn_args:
+  d_in_v: &d_in_v 1  # initial dimension of input nn bias
+  d_in_e: &d_in_e 1  # overwritten to _max_kernel_height * _max_kernel_width = 9
+  d_hid: &d_hid 128
+  num_layers: 4
+  direction: forward
+  equivariant: False
+  symmetry: scale
+  jit: False
+  compile: False
+
+  readout_range: last_layer
+  gnn_skip_connections: False
+
+  concat_mlp_directions: False
+  reciprocal: True
+
+  node_pos_embed: *node_pos_embed
+  edge_pos_embed: *edge_pos_embed
+
+  _max_kernel_height: 3
+  _max_kernel_width: 3
+
+  graph_init:
+    d_in_v: *d_in_v
+    d_in_e: *d_in_e
+    project_node_feats: True
+    project_edge_feats: True
+    d_node: *d_hid
+    d_edge: *d_hid
+
+  positional_encodings:
+    final_linear_pos_embed: False
+    sum_pos_enc: False
+    po_as_different_linear: False
+    equiv_net: False
+    sum_on_io: True
+    equiv_on_hidden: True
+    num_mlps: 3
+    layer_equiv_on_hidden: False
+
+  gnn_args:
+    d_hid: *d_hid
+    message_fn_layers: 1
+    message_fn_skip_connections: False
+    update_node_feats_fn_layers: 1
+    update_node_feats_fn_skip_connections: False
+    update_edge_attr: True
+    dropout: 0.
+    dropout_all: False
+    update_as_act: False
+    update_as_act_arg: sum
+    mlp_on_io: True
+    msg_equiv_on_hidden: True
+    upd_equiv_on_hidden: True
+    layer_msg_equiv_on_hidden: False
+    layer_upd_equiv_on_hidden: False
+    msg_num_mlps: 2
+    upd_num_mlps: 2
+    pos_embed_msg: False
+    pos_embed_upd: False
+    layer_norm: False
+    aggregator: add
+    sign_symmetrization: True
+
+  mlp_args:
+    d_k: [ *d_hid ]
+    activation: silu
+    dropout: 0.
+    final_activation: identity
+    batch_norm: False
+    layer_norm: True
+    bias: True
+    skip: False
+
+  readout_args:
+    d_out: 1
+    d_rho: *d_hid
+
+optimization:
+  clip_grad: True
+  clip_grad_max_norm: 10.0
+  optimizer_name: AdamW
+  optimizer_args:
+    lr: 1e-3
+    weight_decay: 0.01
+  scheduler_args:
+    scheduler: WarmupLRScheduler
+    warmup_steps: 1000
+    scheduler_mode: min
+    decay_rate: 0
+    decay_steps: 0
+    patience: None
+    min_lr: None
+
+wandb_args:
+  project: cifar10_predgen
+  entity: null
+  group: predgen-reproduce
+  name: scalegmn-predgen-sp-w16
+  tags: [predgen, reproduce, scale, relu, w16]

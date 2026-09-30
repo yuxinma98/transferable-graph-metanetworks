@@ -1,0 +1,191 @@
+# Matrix-product ScaleGMN accuracy prediction on OUR multi-width CNN zoo — Stage 3, size
+# generalization: train on w16 only, test on w16-w512.
+#
+# v2 = v1 with the test widths extended from w16-w128 (8x) to w16-w512 (32x), matching
+# the reach of the FMNIST INR size-gen v2 arm and keeping the {3,4}x2^k width ladder
+# regular (48, 64, 96, 128, 192, 256, 384, 512 - alternating x1.5 / x1.33). Train width,
+# split files, model and optimization are byte-identical to v1, which is what makes the
+# v1 checkpoints reusable: this config is meant to be run with --eval-only-ckpt, NOT
+# retrained. The eval batch size scales as bs*(16/w)^2 and floors at 1 from w256 on.
+# Data arm: standard parameterization — the sampled hyperparameters instantiated
+# as-is at every width
+# ($ANYDIM_DATA_ROOT/svhn_cnn_zoo/w{N}_sp/, written by scripts/generate_cnn_zoo.py --dataset svhn --arm sp).
+#
+# Model, optimization and graph conventions are identical to
+# configs/svhn_predgen/scalegmn_dup_w16.yml
+# (Stage 2), so the only thing that differs across the eight Stage-3 conditions is
+# {model family} x {data arm} x {baseline, dup-equiv}. Every test width is
+# evaluated every epoch, and the eval batch size is scaled by (w16/w)^2 inside
+# scripts/train_sizegen_predgen.py to keep activation memory flat.
+#
+# Model selection is on val Kendall tau at w16 only — no OOD width may influence
+# which checkpoint is kept.
+#
+# The MSG function is bilinear in the raw kernel and the source node state, with one
+# learned map per kernel offset, and ScaleGMN's node states and node update are kept
+# unchanged (gnn_args.message_fn_type: matrix_product_conv_scale,
+# src/models/matrix_product_scale_layer.py):
+#
+#   msg_{u->v} = sum_s a_{u,v}[s] * (h_u A_s),   A in R^{9 x d_in_v x d_hid}
+#
+# so with mean aggregation the aggregate is a sum of 9 matrix products,
+# Z^(l) = (1/n_{l-1}) sum_s Wbar_s^(l) H^(l-1) A_s, and the input weights enter the
+# metanetwork only through matrix multiplication. No edge states are formed or updated.
+#
+# ALWAYS run with --duplication-equiv True: there is no baseline variant. Verify the
+# layer first with scripts/check_matrix_product_gmn_cnn.py --family scalegmn.
+#
+# Run:
+#   python scripts/train_sizegen_predgen.py --conf configs/svhn_predgen/mpsgmn_sizegen_sp_v2.yml \
+#       --duplication-equiv True --wandb True
+
+batch_size: 64
+num_workers: 4
+
+data:
+  dataset: cnn_zoo
+  activation_function: relu
+  node_pos_embed: &node_pos_embed True
+  # see scalegmn_predgen_sp.yml: get_edge_types() disagrees with cnn_to_tg_data's
+  # edge order once the output layer has more than one node
+  edge_pos_embed: &edge_pos_embed False
+  max_kernel_size: [3, 3]
+
+  train_layer_layouts: [[1, 16, 16, 16, 10]]
+  train_dataset_paths: [$ANYDIM_DATA_ROOT/svhn_cnn_zoo/w16_sp]
+  train_split_paths: [$ANYDIM_DATA_ROOT/svhn_cnn_zoo/w16_sp/svhn_predgen_splits.json]
+
+  test_layer_layouts: [[1, 16, 16, 16, 10], [1, 32, 32, 32, 10],
+                       [1, 48, 48, 48, 10], [1, 64, 64, 64, 10],
+                       [1, 96, 96, 96, 10], [1, 128, 128, 128, 10],
+                       [1, 192, 192, 192, 10], [1, 256, 256, 256, 10],
+                       [1, 384, 384, 384, 10], [1, 512, 512, 512, 10]]
+  test_dataset_paths: [$ANYDIM_DATA_ROOT/svhn_cnn_zoo/w16_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w32_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w48_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w64_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w96_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w128_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w192_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w256_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w384_sp,
+                       $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w512_sp]
+  test_split_paths: [$ANYDIM_DATA_ROOT/svhn_cnn_zoo/w16_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w32_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w48_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w64_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w96_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w128_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w192_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w256_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w384_sp/svhn_predgen_splits.json,
+                     $ANYDIM_DATA_ROOT/svhn_cnn_zoo/w512_sp/svhn_predgen_splits.json]
+
+train_args:
+  num_epochs: 200
+  seed: 0
+  loss: MSE
+
+scalegmn_args:
+  d_in_v: &d_in_v 1
+  d_in_e: &d_in_e 9   # k_h * k_w: the raw kernel, kept unprojected
+  d_hid: &d_hid 128
+  num_layers: 4
+  direction: forward   # every CNN condition of this study is forward, matching the
+                       # FMNIST size-gen v2 arm; bidirectional was deliberately not run
+  equivariant: False
+  symmetry: scale
+  jit: False
+  compile: False
+
+  readout_range: last_layer   # overridden to full_graph; our readout installs there
+  gnn_skip_connections: False
+
+  concat_mlp_directions: False
+  reciprocal: True
+
+  node_pos_embed: *node_pos_embed
+  edge_pos_embed: *edge_pos_embed
+
+  _max_kernel_height: 3
+  _max_kernel_width: 3
+
+  graph_init:
+    d_in_v: *d_in_v
+    d_in_e: *d_in_e
+    project_node_feats: True
+    project_edge_feats: False  # keep the raw R^9 kernel
+    d_node: *d_hid
+    d_edge: *d_in_e
+
+  positional_encodings:
+    final_linear_pos_embed: False
+    sum_pos_enc: False
+    po_as_different_linear: False
+    equiv_net: False
+    sum_on_io: True
+    equiv_on_hidden: True
+    num_mlps: 3
+    layer_equiv_on_hidden: False
+
+  gnn_args:
+    d_hid: *d_hid
+    message_fn_layers: 1
+    message_fn_skip_connections: False
+    update_node_feats_fn_layers: 1
+    update_node_feats_fn_skip_connections: False
+    update_edge_attr: False  # no edge states in the matrix-product ScaleGMN
+    dropout: 0.
+    dropout_all: False
+    update_as_act: False
+    update_as_act_arg: sum
+    mlp_on_io: True
+    msg_equiv_on_hidden: False  # no MSG EquivariantNet: the message is a matrix product
+    upd_equiv_on_hidden: True
+    layer_msg_equiv_on_hidden: False
+    layer_upd_equiv_on_hidden: False
+    msg_num_mlps: 2
+    upd_num_mlps: 2
+    pos_embed_msg: False
+    pos_embed_upd: False
+    layer_norm: False
+    aggregator: mean  # mean aggregation turns the messages into a matrix product
+    message_fn_type: matrix_product_conv_scale
+    sign_symmetrization: True
+
+  mlp_args:
+    d_k: [ *d_hid ]
+    activation: silu
+    dropout: 0.
+    final_activation: identity
+    batch_norm: False
+    layer_norm: True
+    bias: True
+    skip: False
+
+  readout_args:
+    d_out: 1
+    d_rho: *d_hid
+
+optimization:
+  clip_grad: True
+  clip_grad_max_norm: 10.0
+  optimizer_name: AdamW
+  optimizer_args:
+    lr: 1e-3
+    weight_decay: 0.01
+  scheduler_args:
+    scheduler: WarmupLRScheduler
+    warmup_steps: 1000
+    scheduler_mode: min
+    decay_rate: 0
+    decay_steps: 0
+    patience: None
+    min_lr: None
+
+wandb_args:
+  project: svhn_predgen
+  entity: null
+  group: svhn-predgen-sizegen-mpsgmn-v2
+  name: svhn-sizegen-v2-mpsgmn-sp-deq
+  tags: [svhn, predgen, sizegen, v2, scale, matrix-product, sp, relu, w16]
